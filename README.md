@@ -72,6 +72,13 @@ tasks:
 
     uv run ztsync sync --max-new 5
 
+For a simple background process without systemd:
+
+    ./run_in_backgroundl.sh
+
+The script uses `nohup`, prints the PID and writes output to `~/ztsync.log`.
+Follow the log with `tail -f ~/ztsync.log` and stop the process with `kill PID`.
+
 Do not install or enable the systemd unit before the staged test in PLAN.md has
 passed. Manual installation for later use:
 
