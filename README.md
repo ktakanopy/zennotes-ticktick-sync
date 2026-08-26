@@ -13,33 +13,35 @@ the real vault path and a test project have been verified.
 
 ## Local development
 
-Install uv and run:
+Install `uv` and run:
 
     uv sync
     uv run pytest
     uv run ruff check .
     uv run ruff format --check .
 
+`uv` manages the project environment and lockfile; do not create or invoke a
+virtual environment manually.
+
 The server runtime state must stay outside the vault and repository.
 
 ## Server setup
 
-The current server has a Python virtual environment at `.venv`. If rebuilding
-it, install the project and development tools with:
+Install `uv`, then synchronize the project from `pyproject.toml` and
+`uv.lock`:
 
-    python3 -m venv .venv
-    .venv/bin/pip install -e '.[dev]'
+    uv sync
 
 Copy `.env.example` to `.env`, set the absolute vault path, and keep the file at
 mode 600. Never place TickTick secrets in Git, the vault or logs.
 
 Run the checks and safe scan:
 
-    .venv/bin/pytest
-    .venv/bin/ruff check .
-    .venv/bin/ruff format --check .
-    .venv/bin/ztsync doctor
-    .venv/bin/ztsync sync --dry-run
+    uv run pytest
+    uv run ruff check .
+    uv run ruff format --check .
+    uv run ztsync doctor
+    uv run ztsync sync --dry-run
 
 ## TickTick authentication
 
@@ -54,27 +56,28 @@ TickTick developer portal:
 
 Run the login command in a server shell:
 
-    .venv/bin/ztsync auth login
+    uv run ztsync auth login
 
 Open the printed URL in the Mac browser. The server will receive the callback
 automatically and show a confirmation page. Keep port 8765 restricted to the
 local network; `0.0.0.0` is a bind address, not a browser redirect address.
 After authentication, select the dedicated project:
 
-    .venv/bin/ztsync project ensure
+    uv run ztsync project ensure
 
 ## Running
 
 The first real run should be supervised and limited to the default five new
 tasks:
 
-    .venv/bin/ztsync sync --max-new 5
+    uv run ztsync sync --max-new 5
 
 Do not install or enable the systemd unit before the staged test in PLAN.md has
 passed. Manual installation for later use:
 
     mkdir -p ~/.config/systemd/user
     cp systemd/zennotes-ticktick-sync.service ~/.config/systemd/user/
+    uv sync --no-dev
     systemctl --user daemon-reload
     systemctl --user start zennotes-ticktick-sync.service
 
