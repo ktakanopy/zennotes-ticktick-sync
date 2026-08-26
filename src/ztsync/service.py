@@ -40,8 +40,9 @@ class SingleProcessLock:
 
 def vault_signature(settings: Settings) -> tuple[tuple[str, int, int], ...]:
     signature: list[tuple[str, int, int]] = []
+    vault_path = settings.vault_path.resolve()
     for path in task_files(settings.vault_path, settings.task_paths):
-        relative = path.relative_to(settings.vault_path).as_posix()
+        relative = path.relative_to(vault_path).as_posix()
         stat = path.stat()
         signature.append((relative, stat.st_mtime_ns, stat.st_size))
     return tuple(sorted(signature))
