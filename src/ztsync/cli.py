@@ -4,6 +4,7 @@ import argparse
 import json
 import secrets
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,50 @@ from .reconcile import Reconciler
 from .service import run_forever
 from .state import StateStore
 from .ticktick import TickTickClient, TickTickError, TokenStore
+
+
+class _OAuthCallbackHandler(BaseHTTPRequestHandler):
+    server: _OAuthCallbackServer
+
+    def do_GET(self) -> None:
+        callback = urlparse(self.path)
+        if callback.path != self.server.callback_path:
+            self._respond(404, "OAuth callback path not found.")
+            return
+        query = parse_qs(callback.query)
+        if query.get("state", [None])[0] != self.server.expected_state:
+            self._respond(400, "OAuth state mismatch. Return to the terminal and try again.")
+            return
+        self.server.callback_query = query
+        self._respond(200, "Authorization received. You can close this window.")
+        self.server.shutdown()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _respond(self, status: int, message: str) -> None:
+        body = (f"<!doctype html><html><body><p>{message}</p></body></html>").encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class _OAuthCallbackServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(
+        self,
+        bind_address: tuple[str, int],
+        expected_state: str,
+        callback_path: str,
+    ):
+        self.expected_state = expected_state
+        self.callback_path = callback_path
+        self.callback_query: dict[str, list[str]] | None = None
+        super().__init__(bind_address, _OAuthCallbackHandler)
 
 
 def _settings() -> Settings:
@@ -74,22 +119,56 @@ def _auth_login(settings: Settings) -> int:
     if not settings.ticktick_credentials_configured:
         print("TickTick OAuth client credentials are not configured", file=sys.stderr)
         return 1
+    redirect = urlparse(settings.ticktick_redirect_uri)
+    try:
+        redirect_port = redirect.port
+    except ValueError:
+        print("TICKTICK_REDIRECT_URI has an invalid port", file=sys.stderr)
+        return 1
+    if (
+        redirect.scheme != "http"
+        or not redirect.hostname
+        or redirect.query
+        or redirect.fragment
+        or redirect_port != settings.ticktick_oauth_port
+    ):
+        print(
+            "TICKTICK_REDIRECT_URI must be an HTTP URL with the configured OAuth port "
+            "and no query or fragment",
+            file=sys.stderr,
+        )
+        return 1
     state = secrets.token_urlsafe(24)
     url = TickTickClient.authorization_url(
         settings.ticktick_client_id,
         settings.ticktick_redirect_uri,
         state,
     )
-    print("Open this URL in a browser, authorize the app, then paste the full callback URL:")
-    print(url)
     try:
-        callback = input().strip()
-    except EOFError:
-        print("OAuth callback was not provided", file=sys.stderr)
+        server = _OAuthCallbackServer(
+            (settings.ticktick_oauth_bind_host, settings.ticktick_oauth_port),
+            state,
+            redirect.path or "/",
+        )
+    except OSError as exc:
+        print(f"could not start OAuth callback listener: {exc}", file=sys.stderr)
         return 1
-    query = parse_qs(urlparse(callback).query)
+    print("Open this URL in a browser and authorize the app:")
+    print(url)
+    print(f"Waiting for callback at {settings.ticktick_redirect_uri}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("OAuth login cancelled", file=sys.stderr)
+        return 1
+    finally:
+        server.server_close()
+    query = server.callback_query or {}
     if query.get("state", [None])[0] != state:
         print("OAuth state mismatch; authorization cancelled", file=sys.stderr)
+        return 1
+    if query.get("error", [None])[0]:
+        print(f"OAuth authorization failed: {query['error'][0]}", file=sys.stderr)
         return 1
     code = query.get("code", [None])[0]
     if not code:

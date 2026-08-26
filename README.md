@@ -46,17 +46,20 @@ Run the checks and safe scan:
 Register an OAuth application in the official TickTick developer portal and set
 the client ID and secret in `.env`. The redirect URI must match exactly.
 
-For the recommended loopback flow, create an SSH tunnel from the Mac while the
-server-side login command is waiting for the callback:
+The login listener binds to `0.0.0.0:8765` by default so a browser on the local
+network can reach the server directly. Register this exact redirect URI in the
+TickTick developer portal:
 
-    ssh -N -L 8765:127.0.0.1:8765 takano@192.168.15.14
+    http://192.168.15.14:8765/oauth/callback
 
-In another server shell:
+Run the login command in a server shell:
 
     .venv/bin/ztsync auth login
 
-Open the printed URL in the Mac browser, then paste the resulting callback URL
-back into the server shell. After authentication, select the dedicated project:
+Open the printed URL in the Mac browser. The server will receive the callback
+automatically and show a confirmation page. Keep port 8765 restricted to the
+local network; `0.0.0.0` is a bind address, not a browser redirect address.
+After authentication, select the dedicated project:
 
     .venv/bin/ztsync project ensure
 

@@ -43,7 +43,9 @@ class Settings(BaseModel):
     ticktick_time_zone: str = "America/Sao_Paulo"
     ticktick_client_id: str | None = None
     ticktick_client_secret: str | None = None
-    ticktick_redirect_uri: str = "http://127.0.0.1:8765/oauth/callback"
+    ticktick_redirect_uri: str = "http://192.168.15.14:8765/oauth/callback"
+    ticktick_oauth_bind_host: str = Field(default="0.0.0.0", min_length=1)
+    ticktick_oauth_port: int = Field(default=8765, ge=1, le=65535)
     state_dir: Path
     vault_poll_seconds: int = Field(default=30, ge=5)
     ticktick_poll_seconds: int = Field(default=60, ge=10)
@@ -88,8 +90,14 @@ class Settings(BaseModel):
             ticktick_redirect_uri=_env(
                 dotenv,
                 "TICKTICK_REDIRECT_URI",
-                "http://127.0.0.1:8765/oauth/callback",
+                "http://192.168.15.14:8765/oauth/callback",
             ),
+            ticktick_oauth_bind_host=_env(
+                dotenv,
+                "TICKTICK_OAUTH_BIND_HOST",
+                "0.0.0.0",
+            ),
+            ticktick_oauth_port=int(_env(dotenv, "TICKTICK_OAUTH_PORT", "8765")),
             state_dir=Path(
                 _env(
                     dotenv,
