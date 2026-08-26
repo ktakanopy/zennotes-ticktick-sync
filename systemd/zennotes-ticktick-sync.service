@@ -1,0 +1,21 @@
+[Unit]
+Description=ZenNotes TickTick synchronization
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/takano/projects/zennotes-ticktick-sync
+EnvironmentFile=/home/takano/projects/zennotes-ticktick-sync/.env
+ExecStart=/home/takano/projects/zennotes-ticktick-sync/.venv/bin/ztsync service
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/takano/personal_projects/zennotes
+ReadWritePaths=/home/takano/.local/state/zennotes-ticktick-sync
+
+[Install]
+WantedBy=default.target
