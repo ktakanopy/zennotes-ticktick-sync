@@ -91,25 +91,21 @@ tasks:
 
     uv run ztsync sync --max-new 5
 
-For a simple background process without systemd:
-
-    ./run_in_backgroundl.sh
-
-The script uses `nohup`, prints the PID and writes output to `~/ztsync.log`.
-Follow the log with `tail -f ~/ztsync.log` and stop the process with `kill PID`.
-
-Do not install or enable the systemd unit before the staged test in PLAN.md has
-passed. Manual installation for later use:
+For continuous operation on the server, install the persistent user service:
 
     mkdir -p ~/.config/systemd/user
     cp systemd/zennotes-ticktick-sync.service ~/.config/systemd/user/
     uv sync --no-dev
     systemctl --user daemon-reload
-    systemctl --user start zennotes-ticktick-sync.service
+    systemctl --user enable --now zennotes-ticktick-sync.service
+    systemctl --user is-active zennotes-ticktick-sync.service
 
-The unit is not enabled by the repository setup. Inspect logs with
-`journalctl --user -u zennotes-ticktick-sync.service` and stop it with
-`systemctl --user stop zennotes-ticktick-sync.service`.
+Inspect logs with `journalctl --user -u zennotes-ticktick-sync.service -f`.
+If the server must run while `takano` is not logged in, enable user-manager
+lingering once with `sudo loginctl enable-linger takano`.
+
+If systemd is unavailable, `./run_in_backgroundl.sh` remains a manual fallback.
+It uses `nohup`, prints the PID and writes output to `~/ztsync.log`.
 
 No delete operation is implemented. To roll back, stop the service and restore
 the relevant backup from

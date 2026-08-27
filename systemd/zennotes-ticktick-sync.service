@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/home/takano/projects/zennotes-ticktick-sync
 EnvironmentFile=/home/takano/projects/zennotes-ticktick-sync/.env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/takano/.local/bin/uv run --no-dev --no-sync ztsync service
 Restart=on-failure
 RestartSec=10

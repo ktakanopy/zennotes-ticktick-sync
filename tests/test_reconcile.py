@@ -190,6 +190,26 @@ def test_remote_task_is_imported_to_inbox(tmp_path):
     assert "Imported task due:2026-08-26 !medium #work" in inbox.read_text(encoding="utf-8")
 
 
+def test_timed_remote_task_is_imported_with_clock_time(tmp_path):
+    remote = TickTickTask(
+        id="remote-1",
+        project_id="project-1",
+        title="Timed imported task",
+        due_date=date(2026, 8, 26),
+        due_time=time(18, 30),
+        tags=["work"],
+    )
+    settings = settings_for(tmp_path)
+    client = FakeClient([remote])
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    inbox = tmp_path / "inbox/ticktick.md"
+    assert [action.kind for action in actions] == ["import_local"]
+    assert "Timed imported task due:2026-08-26T18:30 #work" in inbox.read_text(encoding="utf-8")
+
+
 def test_same_field_changed_on_both_sides_creates_conflict(tmp_path):
     daily = tmp_path / "daily-notes"
     daily.mkdir()

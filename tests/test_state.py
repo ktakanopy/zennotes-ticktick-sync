@@ -47,3 +47,15 @@ def test_pending_operation_round_trip(tmp_path) -> None:
         assert store.get_pending("fp-1")["task_id"] == "task-1"
         store.resolve_pending("fp-1")
         assert store.get_pending("fp-1") is None
+
+
+def test_sync_run_records_completion_time(tmp_path) -> None:
+    started = datetime.now(UTC)
+    with StateStore(tmp_path / "state") as store:
+        store.record_run("run-1", started, "success", [])
+        row = store.connection.execute(
+            "SELECT status, finished_at FROM sync_runs WHERE run_id = ?", ("run-1",)
+        ).fetchone()
+
+    assert row["status"] == "success"
+    assert row["finished_at"] is not None

@@ -55,27 +55,45 @@ def run_once(settings: Settings, *, dry_run: bool = False, max_new_tasks: int = 
     started = datetime.now(UTC)
     actions = []
     with StateStore(settings.state_dir) as store:
-        project_id = store.get_metadata("ticktick_project_id")
-        if not project_id:
-            raise TickTickError("run 'ztsync project ensure' before starting sync")
-        with TickTickClient(
-            client_id=settings.ticktick_client_id,
-            client_secret=settings.ticktick_client_secret,
-            token_store=TokenStore(settings.state_dir / "oauth.json"),
-        ) as client:
-            actions = Reconciler(
-                settings,
-                store,
-                client,
-                project_id=project_id,
-                dry_run=dry_run,
-            ).run(max_new_tasks=max_new_tasks)
-        store.record_run(
-            run_id,
-            started,
-            "dry_run" if dry_run else "success",
-            [action.model_dump() for action in actions],
-        )
+        try:
+            project_id = store.get_metadata("ticktick_project_id")
+            if not project_id:
+                raise TickTickError("run 'ztsync project ensure' before starting sync")
+            with TickTickClient(
+                client_id=settings.ticktick_client_id,
+                client_secret=settings.ticktick_client_secret,
+                token_store=TokenStore(settings.state_dir / "oauth.json"),
+            ) as client:
+                actions = Reconciler(
+                    settings,
+                    store,
+                    client,
+                    project_id=project_id,
+                    dry_run=dry_run,
+                ).run(max_new_tasks=max_new_tasks)
+            store.record_run(
+                run_id,
+                started,
+                "dry_run" if dry_run else "success",
+                [action.model_dump() for action in actions],
+            )
+        except Exception as exc:
+            try:
+                store.record_run(
+                    run_id,
+                    started,
+                    "failed",
+                    [
+                        {
+                            "kind": "sync_cycle_failed",
+                            "error": type(exc).__name__,
+                            "reason": str(exc),
+                        }
+                    ],
+                )
+            except Exception:
+                pass
+            raise
     for action in actions:
         print(json.dumps(action.model_dump(), ensure_ascii=False, sort_keys=True))
     return 0

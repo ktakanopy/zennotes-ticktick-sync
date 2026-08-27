@@ -367,7 +367,10 @@ class Reconciler:
             prefix = ""
         values = remote.normalized_fields
         checkbox = "x" if remote.completed else " "
-        due = f" due:{values['due']}" if values["due"] else ""
+        due_value = values["due"] or ""
+        if due_value and values["due_time"]:
+            due_value += f"T{values['due_time']}"
+        due = f" due:{due_value}" if due_value else ""
         priority = f" !{values['priority']}" if values["priority"] else ""
         tags = "".join(f" #{tag}" for tag in values["tags"])
         line = (

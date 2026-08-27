@@ -268,14 +268,16 @@ class StateStore:
         status: str,
         actions: list[dict[str, Any]],
     ) -> None:
+        finished_at = datetime.now(UTC).isoformat()
         self.connection.execute(
             """
-            INSERT INTO sync_runs(run_id, started_at, status, actions_json)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO sync_runs(run_id, started_at, finished_at, status, actions_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 run_id,
                 started_at.astimezone(UTC).isoformat(),
+                finished_at,
                 status,
                 json.dumps(actions, ensure_ascii=False, sort_keys=True),
             ),
