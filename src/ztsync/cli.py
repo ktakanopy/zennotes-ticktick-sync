@@ -219,10 +219,12 @@ def _sync(settings: Settings, dry_run: bool, max_new: int) -> int:
     except (OSError, MarkdownParseError, ValueError) as exc:
         print(f"sync scan failed: {exc}", file=sys.stderr)
         return 1
-    unmarked = sum(1 for task in tasks if not task.task_id)
-    marked = len(tasks) - unmarked
+    empty = sum(1 for task in tasks if not task.title)
+    unmarked = sum(1 for task in tasks if task.title and not task.task_id)
+    marked = sum(1 for task in tasks if task.title and task.task_id)
     mode = "dry-run" if dry_run else "scan-only"
-    print(f"{mode}: {len(tasks)} eligible tasks ({marked} mapped, {unmarked} new)")
+    ignored = f", {empty} empty ignored" if empty else ""
+    print(f"{mode}: {marked + unmarked} eligible tasks ({marked} mapped, {unmarked} new{ignored})")
     if dry_run:
         return 0
     try:
