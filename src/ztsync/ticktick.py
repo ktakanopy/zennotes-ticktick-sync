@@ -225,6 +225,11 @@ class TickTickClient:
             tasks.append(TickTickTask.from_api(normalized))
         return tasks
 
+    def get_project_task(self, project_id: str, task_id: str) -> TickTickTask:
+        payload = dict(self._request("GET", f"/project/{project_id}/task/{task_id}"))
+        payload.setdefault("projectId", project_id)
+        return TickTickTask.from_api(payload)
+
     def create_project(self, name: str) -> dict[str, Any]:
         return dict(self._request("POST", "/project", json={"name": name}))
 

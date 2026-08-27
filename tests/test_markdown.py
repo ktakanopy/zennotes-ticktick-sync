@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 import pytest
@@ -25,6 +25,27 @@ def test_parser_extracts_fields_and_ignores_fence() -> None:
     assert tasks[0].priority == "high"
     assert tasks[0].tags == ["work", "ai"]
     assert tasks[1].completed
+
+
+def test_parser_extracts_natural_due_time_and_tags() -> None:
+    task = parse_text(
+        Path("daily.md"),
+        "- [ ] Send report tomorrow 18am #work #ai\n",
+        reference_date=date(2026, 8, 26),
+    )[0]
+
+    assert task.title == "Send report"
+    assert task.due == date(2026, 8, 27)
+    assert task.due_time == time(18, 0)
+    assert task.tags == ["work", "ai"]
+
+
+def test_parser_accepts_canonical_due_time_and_renders_it() -> None:
+    task = parse_text(Path("daily.md"), "- [ ] Meeting due:2026-08-27T09:30\n")[0]
+
+    assert task.due == date(2026, 8, 27)
+    assert task.due_time == time(9, 30)
+    assert "due:2026-08-27T09:30" in render_task(task)
 
 
 def test_marker_and_render_preserve_identity() -> None:

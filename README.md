@@ -25,6 +25,25 @@ virtual environment manually.
 
 The server runtime state must stay outside the vault and repository.
 
+## Task syntax
+
+Tasks use the same hashtag convention as TickTick. Tags are removed from the
+title and sent as TickTick tags:
+
+    - [ ] Review the release #work #release
+
+Date-only tasks remain all-day tasks. The sync also accepts deterministic
+natural dates with an optional time:
+
+    - [ ] Send the report tomorrow 18:00 #work
+    - [ ] Call the team tomorrow at 6pm #work
+    - [ ] Prepare notes today 9h
+
+The relative date is resolved using `TICKTICK_TIME_ZONE` when the task is
+first synchronized. The Markdown line is then canonicalized to
+`due:YYYY-MM-DDTHH:MM`, so it does not move again at midnight. Existing
+date-only syntax such as `due:2026-08-27` remains supported.
+
 ## Server setup
 
 Install `uv`, then synchronize the project from `pyproject.toml` and

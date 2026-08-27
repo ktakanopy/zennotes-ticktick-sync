@@ -6,7 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .markdown import append_marker, marker, parse_vault, render_task
+from .markdown import marker, parse_vault, render_task
 from .models import (
     Conflict,
     MarkdownTask,
@@ -16,7 +16,7 @@ from .models import (
     priority_name_to_ticktick,
 )
 from .state import StateStore, fields_hash
-from .ticktick import TickTickClient
+from .ticktick import TickTickClient, TickTickError
 from .writer import atomic_create, atomic_replace
 
 
@@ -24,8 +24,8 @@ class ReconcileError(RuntimeError):
     pass
 
 
-def _api_datetime(value: date, time_zone: str) -> str:
-    local = datetime.combine(value, time.min, tzinfo=ZoneInfo(time_zone))
+def _api_datetime(value: date, due_time: time | None, time_zone: str) -> str:
+    local = datetime.combine(value, due_time or time.min, tzinfo=ZoneInfo(time_zone))
     return local.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
@@ -33,13 +33,13 @@ def create_payload(task: MarkdownTask, project_id: str, time_zone: str) -> dict[
     payload: dict[str, Any] = {
         "projectId": project_id,
         "title": task.title,
-        "isAllDay": True,
+        "isAllDay": task.due_time is None,
         "timeZone": time_zone,
         "priority": priority_name_to_ticktick(task.priority),
         "tags": task.tags,
     }
     if task.due:
-        payload["dueDate"] = _api_datetime(task.due, time_zone)
+        payload["dueDate"] = _api_datetime(task.due, task.due_time, time_zone)
     return payload
 
 
@@ -55,10 +55,15 @@ def update_payload(
     payload["priority"] = priority_name_to_ticktick(local_fields["priority"])
     payload["tags"] = local_fields["tags"]
     payload["status"] = 0 if local_fields["status"] == "open" else remote.status
-    payload["isAllDay"] = True
+    due_time = (
+        time.fromisoformat(local_fields["due_time"]) if local_fields.get("due_time") else None
+    )
+    payload["isAllDay"] = due_time is None
     payload["timeZone"] = time_zone
     due = local_fields["due"]
-    payload["dueDate"] = _api_datetime(date.fromisoformat(due), time_zone) if due else None
+    payload["dueDate"] = (
+        _api_datetime(date.fromisoformat(due), due_time, time_zone) if due else None
+    )
     return payload
 
 
@@ -66,7 +71,7 @@ def changed_fields(
     previous: dict[str, Any],
     current: dict[str, Any],
 ) -> set[str]:
-    names = {"status", "title", "due", "priority", "tags"}
+    names = {"status", "title", "due", "due_time", "priority", "tags"}
     return {name for name in names if previous.get(name) != current.get(name)}
 
 
@@ -155,7 +160,10 @@ class Reconciler:
                     line_number=task.line_number,
                     reason="pending remote creation is not visible yet",
                 )
-            updated_line = append_marker(task, remote.id, self.project_id)
+            updated_line = render_task(
+                task,
+                task_marker=marker(remote.id, self.project_id),
+            )
             _replace_task_line(task, updated_line, settings=self.settings)
             self.store.upsert_snapshot(self._snapshot(task, remote))
             self.store.resolve_pending(fingerprint)
@@ -180,7 +188,10 @@ class Reconciler:
             line_number=task.line_number,
             payload=payload,
         )
-        updated_line = append_marker(task, remote.id, self.project_id)
+        updated_line = render_task(
+            task,
+            task_marker=marker(remote.id, self.project_id),
+        )
         try:
             _replace_task_line(task, updated_line, settings=self.settings)
         except BaseException:
@@ -253,6 +264,7 @@ class Reconciler:
             checked=remote.completed,
             title=values["title"],
             due=date.fromisoformat(values["due"]) if values["due"] else None,
+            due_time=time.fromisoformat(values["due_time"]) if values["due_time"] else None,
             priority=values["priority"],
             tags=values["tags"],
             task_marker=marker(remote.id, self.project_id),
@@ -377,6 +389,7 @@ class Reconciler:
             checkbox=checkbox,
             title=values["title"],
             due=date.fromisoformat(values["due"]) if values["due"] else None,
+            due_time=time.fromisoformat(values["due_time"]) if values["due_time"] else None,
             priority=values["priority"],
             tags=values["tags"],
             task_id=remote.id,
@@ -387,7 +400,11 @@ class Reconciler:
         return SyncAction(kind="import_local", task_id=remote.id, path=target.as_posix())
 
     def run(self, *, max_new_tasks: int = 5) -> list[SyncAction]:
-        local_tasks = parse_vault(self.settings.vault_path, self.settings.task_paths)
+        local_tasks = parse_vault(
+            self.settings.vault_path,
+            self.settings.task_paths,
+            reference_date=datetime.now(self.settings.timezone).date(),
+        )
         remote_tasks = self.client.list_project_tasks(self.project_id)
         remote_by_id = {task.id: task for task in remote_tasks}
         actions: list[SyncAction] = []
@@ -407,6 +424,12 @@ class Reconciler:
                 continue
             mapped_ids.add(local.task_id)
             remote = remote_by_id.get(local.task_id)
+            if remote is None:
+                try:
+                    remote = self.client.get_project_task(self.project_id, local.task_id)
+                except TickTickError as exc:
+                    if exc.status_code != 404:
+                        raise
             if remote is None:
                 actions.append(
                     SyncAction(

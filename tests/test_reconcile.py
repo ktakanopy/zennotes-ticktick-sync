@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, time
 
 from ztsync.config import Settings
+from ztsync.markdown import parse_text
 from ztsync.models import TickTickTask
-from ztsync.reconcile import Reconciler
+from ztsync.reconcile import Reconciler, create_payload
 from ztsync.state import StateStore
 
 
@@ -53,6 +54,9 @@ class FakeClient:
     def complete_task(self, project_id, task_id):
         self.completed.append(task_id)
 
+    def get_project_task(self, project_id, task_id):
+        return next(task for task in self.tasks if task.id == task_id)
+
 
 def settings_for(vault_path):
     return Settings(
@@ -60,6 +64,21 @@ def settings_for(vault_path):
         task_paths=["daily-notes", "inbox/ticktick.md"],
         state_dir=vault_path / ".sync-state",
     )
+
+
+def test_create_payload_sends_tags_and_clock_time(tmp_path):
+    task = parse_text(
+        tmp_path / "daily.md",
+        "- [ ] Send report tomorrow 18am #work #release\n",
+        reference_date=date(2026, 8, 26),
+    )[0]
+
+    payload = create_payload(task, "project-1", "America/Sao_Paulo")
+
+    assert payload["title"] == "Send report"
+    assert payload["tags"] == ["work", "release"]
+    assert payload["isAllDay"] is False
+    assert payload["dueDate"] == "2026-08-27T21:00:00+0000"
 
 
 def test_unmarked_markdown_task_is_created_once(tmp_path):
@@ -111,6 +130,44 @@ def test_completed_markdown_task_is_completed_remotely(tmp_path):
         Reconciler(settings, store, client, project_id="project-1").run()
 
     assert client.completed == ["task-1"]
+
+
+def test_mapped_task_missing_from_project_list_is_fetched_directly(tmp_path):
+    class HiddenTaskClient(FakeClient):
+        def list_project_tasks(self, project_id):
+            return []
+
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text(
+        "- [ ] Original due:2026-08-27T09:30 #work <!-- zt:v1 task=task-1 project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    remote = TickTickTask(
+        id="task-1",
+        project_id="project-1",
+        title="Original",
+        due_date=date(2026, 8, 27),
+        due_time=time(9, 30),
+        tags=["work"],
+        raw={"id": "task-1", "projectId": "project-1", "title": "Original"},
+    )
+    client = HiddenTaskClient([remote])
+    settings = settings_for(tmp_path)
+
+    with StateStore(settings.state_dir) as store:
+        Reconciler(settings, store, client, project_id="project-1").run()
+        note.write_text(
+            "- [ ] Changed due:2026-08-27T10:00 #work "
+            "<!-- zt:v1 task=task-1 project=project-1 -->\n",
+            encoding="utf-8",
+        )
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["update_remote"]
+    assert actions[0].fields == ["due_time", "title"]
+    assert client.updated[0]["isAllDay"] is False
 
 
 def test_remote_task_is_imported_to_inbox(tmp_path):

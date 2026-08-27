@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,7 @@ class MarkdownTask(BaseModel):
     checkbox: Literal[" ", "x", "X", "/"]
     title: str
     due: date | None = None
+    due_time: time | None = None
     priority: Priority | None = None
     tags: list[str] = Field(default_factory=list)
     task_id: str | None = None
@@ -43,6 +45,7 @@ class MarkdownTask(BaseModel):
             "status": "completed" if self.completed else "open",
             "title": self.title,
             "due": self.due.isoformat() if self.due else None,
+            "due_time": self.due_time.strftime("%H:%M") if self.due_time else None,
             "priority": self.priority,
             "tags": sorted(set(self.tags)),
         }
@@ -56,6 +59,7 @@ class TickTickTask(BaseModel):
     title: str
     status: int = 0
     due_date: date | None = None
+    due_time: time | None = None
     priority: int = 0
     tags: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -70,6 +74,7 @@ class TickTickTask(BaseModel):
             "status": "completed" if self.completed else "open",
             "title": self.title.strip(),
             "due": self.due_date.isoformat() if self.due_date else None,
+            "due_time": self.due_time.strftime("%H:%M") if self.due_time else None,
             "priority": ticktick_priority_to_name(self.priority),
             "tags": sorted(set(self.tags)),
         }
@@ -78,6 +83,14 @@ class TickTickTask(BaseModel):
     def from_api(cls, payload: dict[str, Any]) -> TickTickTask:
         due_date = payload.get("dueDate") or payload.get("due_date")
         parsed_due = date.fromisoformat(str(due_date)[:10]) if due_date else None
+        parsed_due_time = None
+        if due_date and "T" in str(due_date) and not payload.get("isAllDay", False):
+            parsed_datetime = datetime.fromisoformat(str(due_date).replace("Z", "+00:00"))
+            time_zone = payload.get("timeZone")
+            if time_zone and parsed_datetime.tzinfo:
+                parsed_datetime = parsed_datetime.astimezone(ZoneInfo(str(time_zone)))
+            parsed_due = parsed_datetime.date()
+            parsed_due_time = parsed_datetime.time().replace(second=0, microsecond=0)
         raw_tags = payload.get("tags") or []
         tags = sorted(str(tag) for tag in raw_tags)
         return cls(
@@ -86,6 +99,7 @@ class TickTickTask(BaseModel):
             title=str(payload.get("title") or ""),
             status=int(payload.get("status") or 0),
             due_date=parsed_due,
+            due_time=parsed_due_time,
             priority=int(payload.get("priority") or 0),
             tags=tags,
             raw=dict(payload),
