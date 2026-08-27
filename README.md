@@ -107,6 +107,20 @@ lingering once with `sudo loginctl enable-linger takano`.
 If systemd is unavailable, `./run_in_backgroundl.sh` remains a manual fallback.
 It uses `nohup`, prints the PID and writes output to `~/ztsync.log`.
 
-No delete operation is implemented. To roll back, stop the service and restore
-the relevant backup from
+Tasks already represented in a configured daily-notes path are not imported to
+`inbox/ticktick.md`. Before the first run after an existing migration, inspect
+possible duplicate pairs with:
+
+    uv run ztsync merge
+
+The command keeps the daily-notes task as canonical. Apply only after reviewing
+the output; it removes the duplicate inbox line and deletes the matching
+duplicate TickTick task:
+
+    systemctl --user stop zennotes-ticktick-sync.service
+    uv run ztsync merge --apply
+    systemctl --user start zennotes-ticktick-sync.service
+
+The normal sync never deletes tasks. To roll back local Markdown changes, stop
+the service and restore the relevant backup from
 `/home/takano/.local/state/zennotes-ticktick-sync/backups/` after review.

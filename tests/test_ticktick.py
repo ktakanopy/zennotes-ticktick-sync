@@ -100,6 +100,28 @@ def test_client_reads_mapped_task_directly(tmp_path) -> None:
     assert task.tags == ["work"]
 
 
+def test_client_deletes_task(tmp_path) -> None:
+    token_store = TokenStore(tmp_path / "oauth.json")
+    token_store.save(OAuthToken(access_token="secret"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/open/v1/project/project-1/task/task-1"
+        return httpx.Response(204)
+
+    http_client = httpx.Client(
+        base_url=API_BASE_URL,
+        transport=httpx.MockTransport(handler),
+    )
+    with TickTickClient(
+        client_id="client",
+        client_secret="secret",
+        token_store=token_store,
+        http_client=http_client,
+    ) as client:
+        client.delete_task("project-1", "task-1")
+
+
 def test_expired_token_requires_refresh_token(tmp_path) -> None:
     store = TokenStore(tmp_path / "oauth.json")
     store.save(

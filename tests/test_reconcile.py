@@ -2,6 +2,7 @@ from datetime import date, time
 
 from ztsync.config import Settings
 from ztsync.markdown import parse_text
+from ztsync.merge import apply_duplicate_groups, find_duplicate_groups
 from ztsync.models import TickTickTask
 from ztsync.reconcile import Reconciler, create_payload
 from ztsync.state import StateStore
@@ -13,6 +14,7 @@ class FakeClient:
         self.created = []
         self.updated = []
         self.completed = []
+        self.deleted = []
 
     def list_project_tasks(self, project_id):
         return [task for task in self.tasks if task.project_id == project_id]
@@ -57,6 +59,10 @@ class FakeClient:
     def get_project_task(self, project_id, task_id):
         return next(task for task in self.tasks if task.id == task_id)
 
+    def delete_task(self, project_id, task_id):
+        self.deleted.append(task_id)
+        self.tasks = [task for task in self.tasks if task.id != task_id]
+
 
 def settings_for(vault_path):
     return Settings(
@@ -97,6 +103,28 @@ def test_unmarked_markdown_task_is_created_once(tmp_path):
     assert second == []
     assert len(client.created) == 1
     assert "zt:v1 task=task-1 project=project-1" in note.read_text(encoding="utf-8")
+
+
+def test_unmarked_markdown_task_links_to_matching_remote_task(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text("- [ ] Existing task #work\n", encoding="utf-8")
+    remote = TickTickTask(
+        id="remote-1",
+        project_id="project-1",
+        title="Existing task",
+        tags=["work"],
+    )
+    client = FakeClient([remote])
+    settings = settings_for(tmp_path)
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["link_local"]
+    assert client.created == []
+    assert "zt:v1 task=remote-1 project=project-1" in note.read_text(encoding="utf-8")
 
 
 def test_empty_markdown_checkbox_is_ignored_without_blocking_other_tasks(tmp_path):
@@ -168,6 +196,132 @@ def test_mapped_task_missing_from_project_list_is_fetched_directly(tmp_path):
     assert [action.kind for action in actions] == ["update_remote"]
     assert actions[0].fields == ["due_time", "title"]
     assert client.updated[0]["isAllDay"] is False
+
+
+def test_remote_duplicate_of_daily_task_is_not_imported(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text(
+        "- [ ] Existing task #work <!-- zt:v1 task=canonical project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    canonical = TickTickTask(
+        id="canonical",
+        project_id="project-1",
+        title="Existing task",
+        tags=["work"],
+    )
+    duplicate = canonical.model_copy(update={"id": "duplicate"})
+    client = FakeClient([canonical, duplicate])
+    settings = settings_for(tmp_path)
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["ambiguous_match"]
+    assert actions[0].task_id == "duplicate"
+    assert not (tmp_path / "inbox/ticktick.md").exists()
+
+
+def test_merge_removes_inbox_duplicate_and_deletes_remote_copy(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text(
+        "- [ ] Existing task #work <!-- zt:v1 task=canonical project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    inbox_note = inbox / "ticktick.md"
+    inbox_note.write_text(
+        "- [ ] Existing task #work <!-- zt:v1 task=duplicate project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    client = FakeClient(
+        [
+            TickTickTask(
+                id="canonical", project_id="project-1", title="Existing task", tags=["work"]
+            ),
+            TickTickTask(
+                id="duplicate", project_id="project-1", title="Existing task", tags=["work"]
+            ),
+        ]
+    )
+    settings = settings_for(tmp_path)
+
+    groups = find_duplicate_groups(settings, "project-1")
+    outcomes = apply_duplicate_groups(settings, client, "project-1", groups)
+
+    assert len(outcomes) == 1
+    assert client.deleted == ["duplicate"]
+    assert "zt:v1 task=canonical project=project-1" in note.read_text(encoding="utf-8")
+    assert inbox_note.read_text(encoding="utf-8") == ""
+
+
+def test_merge_removes_multiple_duplicates_from_one_inbox_file(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text(
+        "- [ ] First task #work <!-- zt:v1 task=canonical-1 project=project-1 -->\n"
+        "- [ ] Second task #work <!-- zt:v1 task=canonical-2 project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    inbox_note = inbox / "ticktick.md"
+    inbox_note.write_text(
+        "- [ ] First task #work <!-- zt:v1 task=duplicate-1 project=project-1 -->\n"
+        "- [ ] Second task #work <!-- zt:v1 task=duplicate-2 project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    client = FakeClient(
+        [
+            TickTickTask(
+                id="canonical-1", project_id="project-1", title="First task", tags=["work"]
+            ),
+            TickTickTask(
+                id="canonical-2", project_id="project-1", title="Second task", tags=["work"]
+            ),
+            TickTickTask(
+                id="duplicate-1", project_id="project-1", title="First task", tags=["work"]
+            ),
+            TickTickTask(
+                id="duplicate-2", project_id="project-1", title="Second task", tags=["work"]
+            ),
+        ]
+    )
+    settings = settings_for(tmp_path)
+
+    groups = find_duplicate_groups(settings, "project-1")
+    outcomes = apply_duplicate_groups(settings, client, "project-1", groups)
+
+    assert len(outcomes) == 2
+    assert client.deleted == ["duplicate-1", "duplicate-2"]
+    assert inbox_note.read_text(encoding="utf-8") == ""
+
+
+def test_merge_matches_task_url_insensitively(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    (daily / "2026-08-26.md").write_text(
+        "- [ ] Existing task https://example.com/source #work "
+        "<!-- zt:v1 task=canonical project=project-1 -->\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "ticktick.md").write_text(
+        "- [ ] Existing task #work <!-- zt:v1 task=duplicate project=project-1 -->\n",
+        encoding="utf-8",
+    )
+
+    groups = find_duplicate_groups(settings_for(tmp_path), "project-1")
+
+    assert len(groups) == 1
+    assert groups[0]["canonical"]["task_id"] == "canonical"
 
 
 def test_remote_task_is_imported_to_inbox(tmp_path):

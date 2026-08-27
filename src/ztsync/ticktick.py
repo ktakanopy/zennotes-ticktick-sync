@@ -243,3 +243,6 @@ class TickTickClient:
 
     def complete_task(self, project_id: str, task_id: str) -> None:
         self._request("POST", f"/project/{project_id}/task/{task_id}/complete")
+
+    def delete_task(self, project_id: str, task_id: str) -> None:
+        self._request("DELETE", f"/project/{project_id}/task/{task_id}")

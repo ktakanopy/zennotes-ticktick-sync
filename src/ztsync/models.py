@@ -135,10 +135,12 @@ class Conflict(BaseModel):
 class SyncAction(BaseModel):
     kind: Literal[
         "create_remote",
+        "link_local",
         "update_remote",
         "complete_remote",
         "update_local",
         "import_local",
+        "ambiguous_match",
         "conflict",
         "local_task_missing",
         "remote_task_missing",

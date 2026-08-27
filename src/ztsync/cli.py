@@ -10,8 +10,9 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import Settings
 from .markdown import MarkdownParseError, parse_vault
+from .merge import apply_duplicate_groups, find_duplicate_groups
 from .reconcile import Reconciler
-from .service import run_forever
+from .service import SingleProcessLock, run_forever
 from .state import StateStore
 from .ticktick import TickTickClient, TickTickError, TokenStore
 
@@ -248,6 +249,38 @@ def _sync(settings: Settings, dry_run: bool, max_new: int) -> int:
     return 0
 
 
+def _merge(settings: Settings, apply: bool) -> int:
+    try:
+        with SingleProcessLock(settings.state_dir / "service.lock"):
+            with StateStore(settings.state_dir) as store:
+                project_id = store.get_metadata("ticktick_project_id")
+                if not project_id:
+                    print("run 'ztsync project ensure' before merge", file=sys.stderr)
+                    return 1
+                groups = find_duplicate_groups(settings, project_id)
+                if not apply:
+                    for group in groups:
+                        print(json.dumps(group, ensure_ascii=False, sort_keys=True))
+                    if not groups:
+                        print("no inbox/daily duplicate candidates")
+                    return 0
+                with _client(settings) as client:
+                    outcomes = apply_duplicate_groups(
+                        settings,
+                        client,
+                        project_id,
+                        groups,
+                    )
+                for outcome in outcomes:
+                    print(json.dumps(outcome, ensure_ascii=False, sort_keys=True))
+                if not outcomes:
+                    print("no inbox/daily duplicate candidates")
+    except (TickTickError, OSError, MarkdownParseError, ValueError, RuntimeError) as exc:
+        print(f"merge failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ztsync")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -267,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
     sync = subparsers.add_parser("sync")
     sync.add_argument("--dry-run", action="store_true")
     sync.add_argument("--max-new", type=int, default=5)
+    merge = subparsers.add_parser("merge")
+    merge.add_argument("--apply", action="store_true")
     subparsers.add_parser("service")
 
     args = parser.parse_args(argv)
@@ -287,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_new < 0:
             parser.error("--max-new must be non-negative")
         return _sync(settings, args.dry_run, args.max_new)
+    if args.command == "merge":
+        return _merge(settings, args.apply)
     if args.command == "service":
         run_forever(settings)
         return 0

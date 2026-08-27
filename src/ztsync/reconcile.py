@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .markdown import marker, parse_vault, render_task
+from .matching import markdown_match_key, ticktick_match_key
 from .models import (
     Conflict,
     MarkdownTask,
@@ -243,6 +245,55 @@ class Reconciler:
             fields=sorted(fields),
         )
 
+    def _link_local(
+        self,
+        task: MarkdownTask,
+        remote: TickTickTask,
+    ) -> SyncAction:
+        fields = changed_fields(remote.normalized_fields, task.normalized_fields)
+        if self.dry_run:
+            return SyncAction(
+                kind="link_local",
+                task_id=remote.id,
+                path=task.path,
+                line_number=task.line_number,
+                fields=sorted(fields),
+                reason="matched an existing TickTick task by content",
+            )
+
+        updated_remote = remote
+        if fields:
+            local_fields = task.normalized_fields
+            updated_remote = self.client.update_task(
+                remote.id,
+                update_payload(remote, local_fields, self.settings.ticktick_time_zone),
+            )
+            if local_fields["status"] == "completed" and not remote.completed:
+                self.client.complete_task(self.project_id, remote.id)
+                updated_remote = updated_remote.model_copy(update={"status": 2})
+
+        updated_line = render_task(
+            task,
+            task_marker=marker(remote.id, self.project_id),
+        )
+        linked_task = task.model_copy(
+            update={
+                "raw_line": updated_line,
+                "task_id": remote.id,
+                "project_id": self.project_id,
+            }
+        )
+        _replace_task_line(task, updated_line, settings=self.settings)
+        self.store.upsert_snapshot(self._snapshot(linked_task, updated_remote))
+        return SyncAction(
+            kind="link_local",
+            task_id=remote.id,
+            path=task.path,
+            line_number=task.line_number,
+            fields=sorted(fields),
+            reason="matched an existing TickTick task by content",
+        )
+
     def _update_local(
         self,
         task: MarkdownTask,
@@ -411,12 +462,64 @@ class Reconciler:
         remote_tasks = self.client.list_project_tasks(self.project_id)
         remote_by_id = {task.id: task for task in remote_tasks}
         actions: list[SyncAction] = []
-        mapped_ids: set[str] = set()
+        mapped_ids = {
+            local.task_id
+            for local in local_tasks
+            if local.task_id and local.project_id == self.project_id
+        }
+        daily_mapped_by_key: defaultdict[tuple[Any, ...], list[MarkdownTask]] = defaultdict(list)
+        unmarked_by_key: defaultdict[tuple[Any, ...], list[MarkdownTask]] = defaultdict(list)
+        for local in local_tasks:
+            if not local.title:
+                continue
+            key = markdown_match_key(local)
+            if local.task_id and local.project_id == self.project_id:
+                if (
+                    Path(local.path).resolve()
+                    != (self.settings.vault_path.resolve() / "inbox/ticktick.md").resolve()
+                ):
+                    daily_mapped_by_key[key].append(local)
+            elif local.task_id is None:
+                unmarked_by_key[key].append(local)
+
+        remote_by_key: defaultdict[tuple[Any, ...], list[TickTickTask]] = defaultdict(list)
+        for remote in remote_tasks:
+            if remote.id not in mapped_ids:
+                remote_by_key[ticktick_match_key(remote)].append(remote)
+
+        linked_by_location: dict[tuple[str, int], TickTickTask] = {}
+        ambiguous_keys: set[tuple[Any, ...]] = set()
+        for key, candidates in unmarked_by_key.items():
+            available_remote = remote_by_key.get(key, [])
+            if len(candidates) == 1 and len(available_remote) == 1:
+                linked_by_location[(candidates[0].path, candidates[0].line_number)] = (
+                    available_remote[0]
+                )
+            elif available_remote:
+                ambiguous_keys.add(key)
+
         remaining_new = max_new_tasks
 
         for local in local_tasks:
             if local.task_id is None:
                 if not local.title:
+                    continue
+                key = markdown_match_key(local)
+                location = (local.path, local.line_number)
+                if key in ambiguous_keys:
+                    actions.append(
+                        SyncAction(
+                            kind="ambiguous_match",
+                            path=local.path,
+                            line_number=local.line_number,
+                            reason="multiple local or TickTick tasks match by content",
+                        )
+                    )
+                    continue
+                linked_remote = linked_by_location.get(location)
+                if linked_remote:
+                    actions.append(self._link_local(local, linked_remote))
+                    mapped_ids.add(linked_remote.id)
                     continue
                 if remaining_new <= 0:
                     continue
@@ -425,7 +528,6 @@ class Reconciler:
                 continue
             if local.project_id != self.project_id:
                 continue
-            mapped_ids.add(local.task_id)
             remote = remote_by_id.get(local.task_id)
             if remote is None:
                 try:
@@ -449,6 +551,18 @@ class Reconciler:
 
         for remote in remote_tasks:
             if remote.id not in mapped_ids:
+                matching_local = daily_mapped_by_key.get(ticktick_match_key(remote), [])
+                if matching_local:
+                    actions.append(
+                        SyncAction(
+                            kind="ambiguous_match",
+                            task_id=remote.id,
+                            reason=(
+                                "remote task matches a daily-notes task; do not import it to inbox"
+                            ),
+                        )
+                    )
+                    continue
                 if remaining_new <= 0:
                     continue
                 actions.append(self._import_remote(remote))
