@@ -80,6 +80,25 @@ def test_unmarked_markdown_task_is_created_once(tmp_path):
     assert "zt:v1 task=task-1 project=project-1" in note.read_text(encoding="utf-8")
 
 
+def test_empty_markdown_checkbox_is_ignored_without_blocking_other_tasks(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text("- [x]\n- [ ] Real task\n", encoding="utf-8")
+    client = FakeClient()
+    settings = settings_for(tmp_path)
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["create_remote"]
+    assert actions[0].line_number == 2
+    assert len(client.created) == 1
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "- [x]"
+    assert "zt:v1 task=task-1 project=project-1" in lines[1]
+
+
 def test_completed_markdown_task_is_completed_remotely(tmp_path):
     daily = tmp_path / "daily-notes"
     daily.mkdir()

@@ -396,6 +396,8 @@ class Reconciler:
 
         for local in local_tasks:
             if local.task_id is None:
+                if not local.title:
+                    continue
                 if remaining_new <= 0:
                     continue
                 actions.append(self._create_remote(local, remote_by_id))
