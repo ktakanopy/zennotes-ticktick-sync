@@ -12,7 +12,8 @@ TASK_RE = re.compile(
     r"(?:[ \t]+(?P<body>.*?))?(?P<newline>\r?\n)?$"
 )
 MARKER_RE = re.compile(
-    r"<!--\s*zt:v1\s+task=(?P<task>[^\s>]+)\s+project=(?P<project>[^\s>]+)\s*-->"
+    r"<!--\s*zt:v1\s+task=(?P<task>[^\s>]+)"
+    r"(?:\s+item=(?P<item>[^\s>]+))?\s+project=(?P<project>[^\s>]+)\s*-->"
 )
 DUE_RE = re.compile(
     r"(?<!\S)due:(?P<due>\d{4}-\d{2}-\d{2})"
@@ -77,6 +78,7 @@ def _parse_task(
         raise MarkdownParseError(f"{path}:{line_number}: invalid or duplicate task marker")
     marker_match = marker_matches[0] if marker_matches else None
     task_id = marker_match.group("task") if marker_match else None
+    item_id = marker_match.group("item") if marker_match else None
     project_id = marker_match.group("project") if marker_match else None
 
     clean_body = MARKER_RE.sub("", body).strip()
@@ -131,6 +133,7 @@ def _parse_task(
         priority=priority,
         tags=tags,
         task_id=task_id,
+        item_id=item_id,
         project_id=project_id,
         newline=newline,
     )
@@ -155,7 +158,17 @@ def parse_text(
         task = _parse_task(path, line_number, raw_line, reference_date)
         if task:
             tasks.append(task)
-    return tasks
+    stack: list[MarkdownTask] = []
+    with_parents: list[MarkdownTask] = []
+    for task in tasks:
+        while stack and len(stack[-1].indent) >= len(task.indent):
+            stack.pop()
+        parent = stack[-1] if stack else None
+        with_parents.append(
+            task.model_copy(update={"parent_line_number": parent.line_number if parent else None})
+        )
+        stack.append(task)
+    return with_parents
 
 
 def parse_file(path: Path, *, reference_date: date | None = None) -> list[MarkdownTask]:
@@ -191,11 +204,11 @@ def parse_vault(
     reference_date: date | None = None,
 ) -> list[MarkdownTask]:
     tasks: list[MarkdownTask] = []
-    seen_markers: dict[tuple[str, str], MarkdownTask] = {}
+    seen_markers: dict[tuple[str, str | None, str], MarkdownTask] = {}
     for path in task_files(vault_path, configured_paths):
         for task in parse_file(path, reference_date=reference_date):
             if task.task_id and task.project_id:
-                key = (task.task_id, task.project_id)
+                key = (task.task_id, task.item_id, task.project_id)
                 if key in seen_markers:
                     previous = seen_markers[key]
                     raise MarkdownParseError(
@@ -207,8 +220,9 @@ def parse_vault(
     return tasks
 
 
-def marker(task_id: str, project_id: str) -> str:
-    return f"<!-- zt:v1 task={task_id} project={project_id} -->"
+def marker(task_id: str, project_id: str, item_id: str | None = None) -> str:
+    item = f" item={item_id}" if item_id else ""
+    return f"<!-- zt:v1 task={task_id}{item} project={project_id} -->"
 
 
 def render_task(
@@ -244,9 +258,14 @@ def render_task(
     return f"{task.indent}- [{checkbox}]{suffix}{task.newline}"
 
 
-def append_marker(task: MarkdownTask, task_id: str, project_id: str) -> str:
+def append_marker(
+    task: MarkdownTask,
+    task_id: str,
+    project_id: str,
+    item_id: str | None = None,
+) -> str:
     if task.task_id and task.project_id:
         return task.raw_line
     newline = task.newline
     content = task.raw_line[: -len(newline)] if newline else task.raw_line
-    return f"{content} {marker(task_id, project_id)}{newline}"
+    return f"{content} {marker(task_id, project_id, item_id)}{newline}"

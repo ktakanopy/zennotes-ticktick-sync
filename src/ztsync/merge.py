@@ -49,7 +49,7 @@ def find_duplicate_groups(
     )
     groups: defaultdict[tuple[Any, ...], list[MarkdownTask]] = defaultdict(list)
     for task in tasks:
-        if task.title and task.project_id in {None, project_id}:
+        if task.title and not task.is_subtask and task.project_id in {None, project_id}:
             groups[markdown_match_key(task)].append(task)
 
     result: list[dict[str, Any]] = []

@@ -24,7 +24,9 @@ class MarkdownTask(BaseModel):
     priority: Priority | None = None
     tags: list[str] = Field(default_factory=list)
     task_id: str | None = None
+    item_id: str | None = None
     project_id: str | None = None
+    parent_line_number: int | None = Field(default=None, ge=1)
     newline: Literal["\n", "\r\n", ""] = "\n"
 
     @property
@@ -40,6 +42,10 @@ class MarkdownTask(BaseModel):
         return "open"
 
     @property
+    def is_subtask(self) -> bool:
+        return self.parent_line_number is not None or self.item_id is not None
+
+    @property
     def normalized_fields(self) -> dict[str, Any]:
         return {
             "status": "completed" if self.completed else "open",
@@ -49,6 +55,51 @@ class MarkdownTask(BaseModel):
             "priority": self.priority,
             "tags": sorted(set(self.tags)),
         }
+
+
+class TickTickItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    title: str
+    status: int = 0
+    sort_order: int = 0
+    due_date: date | None = None
+    due_time: time | None = None
+
+    @property
+    def completed(self) -> bool:
+        return self.status in {1, 2}
+
+    @property
+    def normalized_fields(self) -> dict[str, Any]:
+        return {
+            "title": self.title.strip(),
+            "status": "completed" if self.completed else "open",
+            "due": self.due_date.isoformat() if self.due_date else None,
+            "due_time": self.due_time.strftime("%H:%M") if self.due_time else None,
+        }
+
+    @classmethod
+    def from_api(cls, payload: dict[str, Any]) -> TickTickItem:
+        start_date = payload.get("startDate") or payload.get("start_date")
+        parsed_due = date.fromisoformat(str(start_date)[:10]) if start_date else None
+        parsed_due_time = None
+        if start_date and "T" in str(start_date) and not payload.get("isAllDay", False):
+            parsed_datetime = datetime.fromisoformat(str(start_date).replace("Z", "+00:00"))
+            time_zone = payload.get("timeZone")
+            if time_zone and parsed_datetime.tzinfo:
+                parsed_datetime = parsed_datetime.astimezone(ZoneInfo(str(time_zone)))
+            parsed_due = parsed_datetime.date()
+            parsed_due_time = parsed_datetime.time().replace(second=0, microsecond=0)
+        return cls(
+            id=str(payload["id"]),
+            title=str(payload.get("title") or ""),
+            status=int(payload.get("status") or 0),
+            sort_order=int(payload.get("sortOrder") or 0),
+            due_date=parsed_due,
+            due_time=parsed_due_time,
+        )
 
 
 class TickTickTask(BaseModel):
@@ -62,6 +113,7 @@ class TickTickTask(BaseModel):
     due_time: time | None = None
     priority: int = 0
     tags: list[str] = Field(default_factory=list)
+    items: list[TickTickItem] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -102,6 +154,7 @@ class TickTickTask(BaseModel):
             due_time=parsed_due_time,
             priority=int(payload.get("priority") or 0),
             tags=tags,
+            items=[TickTickItem.from_api(item) for item in payload.get("items") or []],
             raw=dict(payload),
         )
 

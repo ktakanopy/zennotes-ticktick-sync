@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 
@@ -79,6 +79,16 @@ def test_client_reads_mapped_task_directly(tmp_path) -> None:
                 "timeZone": "America/Sao_Paulo",
                 "dueDate": "2026-08-27T21:30:00+00:00",
                 "tags": ["work"],
+                "items": [
+                    {
+                        "id": "item-1",
+                        "title": "Child task",
+                        "status": 1,
+                        "isAllDay": False,
+                        "startDate": "2026-08-28T12:00:00+00:00",
+                        "timeZone": "America/Sao_Paulo",
+                    }
+                ],
             },
         )
 
@@ -98,6 +108,9 @@ def test_client_reads_mapped_task_directly(tmp_path) -> None:
     assert task.completed
     assert task.due_time == time(18, 30)
     assert task.tags == ["work"]
+    assert task.items[0].completed
+    assert task.items[0].due_date == date(2026, 8, 28)
+    assert task.items[0].due_time == time(9, 0)
 
 
 def test_client_deletes_task(tmp_path) -> None:

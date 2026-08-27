@@ -58,6 +58,19 @@ def test_marker_and_render_preserve_identity() -> None:
     assert render_task(mapped, checked=True).startswith("- [x] Existing task")
 
 
+def test_parser_tracks_nested_task_and_item_marker() -> None:
+    tasks = parse_text(
+        Path("daily.md"),
+        "- [ ] Parent\n  - [ ] Child <!-- zt:v1 task=parent-1 item=item-1 project=project-1 -->\n",
+    )
+
+    assert tasks[0].parent_line_number is None
+    assert tasks[1].parent_line_number == 1
+    assert tasks[1].task_id == "parent-1"
+    assert tasks[1].item_id == "item-1"
+    assert tasks[1].is_subtask
+
+
 def test_invalid_due_date_is_rejected() -> None:
     with pytest.raises(MarkdownParseError):
         parse_text(Path("daily.md"), "- [ ] Bad due:2026-02-31\n")

@@ -3,7 +3,7 @@ from datetime import date, time
 from ztsync.config import Settings
 from ztsync.markdown import parse_text
 from ztsync.merge import apply_duplicate_groups, find_duplicate_groups
-from ztsync.models import TickTickTask
+from ztsync.models import TickTickItem, TickTickTask
 from ztsync.reconcile import Reconciler, create_payload
 from ztsync.state import StateStore
 
@@ -20,6 +20,10 @@ class FakeClient:
         return [task for task in self.tasks if task.project_id == project_id]
 
     def create_task(self, payload):
+        items = [
+            TickTickItem.from_api({**item, "id": f"item-{index + 1}"})
+            for index, item in enumerate(payload.get("items", []))
+        ]
         task = TickTickTask(
             id=f"task-{len(self.created) + 1}",
             project_id=payload["projectId"],
@@ -29,6 +33,7 @@ class FakeClient:
             else None,
             priority=payload["priority"],
             tags=payload["tags"],
+            items=items,
             raw=payload,
         )
         self.created.append(payload)
@@ -37,6 +42,12 @@ class FakeClient:
 
     def update_task(self, task_id, payload):
         current = next(task for task in self.tasks if task.id == task_id)
+        items = current.items
+        if "items" in payload:
+            items = [
+                TickTickItem.from_api({**item, "id": item.get("id") or f"item-{index + 1}"})
+                for index, item in enumerate(payload["items"])
+            ]
         updated = TickTickTask(
             id=current.id,
             project_id=current.project_id,
@@ -47,6 +58,7 @@ class FakeClient:
             else None,
             priority=payload["priority"],
             tags=payload["tags"],
+            items=items,
             raw=payload,
         )
         self.tasks = [updated if task.id == task_id else task for task in self.tasks]
@@ -85,6 +97,82 @@ def test_create_payload_sends_tags_and_clock_time(tmp_path):
     assert payload["tags"] == ["work", "release"]
     assert payload["isAllDay"] is False
     assert payload["dueDate"] == "2026-08-27T21:00:00+0000"
+
+
+def test_nested_markdown_tasks_create_ticktick_items(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text(
+        "- [ ] Parent task\n  - [x] First subtask\n  - [ ] Second subtask\n",
+        encoding="utf-8",
+    )
+    settings = settings_for(tmp_path)
+    client = FakeClient()
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["create_remote"]
+    assert [item["title"] for item in client.created[0]["items"]] == [
+        "First subtask",
+        "Second subtask",
+    ]
+    assert [item["status"] for item in client.created[0]["items"]] == [1, 0]
+    text = note.read_text(encoding="utf-8")
+    assert "zt:v1 task=task-1 project=project-1" in text
+    assert "zt:v1 task=task-1 item=item-1 project=project-1" in text
+    assert "zt:v1 task=task-1 item=item-2 project=project-1" in text
+
+
+def test_remote_task_items_are_imported_as_nested_markdown_tasks(tmp_path):
+    remote = TickTickTask(
+        id="remote-1",
+        project_id="project-1",
+        title="Imported parent",
+        items=[
+            TickTickItem(id="item-1", title="Done child", status=1),
+            TickTickItem(id="item-2", title="Open child"),
+        ],
+    )
+    settings = settings_for(tmp_path)
+    client = FakeClient([remote])
+
+    with StateStore(settings.state_dir) as store:
+        actions = Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert [action.kind for action in actions] == ["import_local"]
+    assert (tmp_path / "inbox/ticktick.md").read_text(encoding="utf-8") == (
+        "- [ ] Imported parent <!-- zt:v1 task=remote-1 project=project-1 -->\n"
+        "  - [x] Done child <!-- zt:v1 task=remote-1 item=item-1 project=project-1 -->\n"
+        "  - [ ] Open child <!-- zt:v1 task=remote-1 item=item-2 project=project-1 -->\n"
+    )
+
+
+def test_subtask_completion_syncs_in_both_directions(tmp_path):
+    daily = tmp_path / "daily-notes"
+    daily.mkdir()
+    note = daily / "2026-08-26.md"
+    note.write_text("- [ ] Parent task\n  - [ ] Child task\n", encoding="utf-8")
+    settings = settings_for(tmp_path)
+    client = FakeClient()
+
+    with StateStore(settings.state_dir) as store:
+        Reconciler(settings, store, client, project_id="project-1").run()
+        note.write_text(
+            "- [ ] Parent task <!-- zt:v1 task=task-1 project=project-1 -->\n"
+            "  - [x] Child task <!-- zt:v1 task=task-1 item=item-1 project=project-1 -->\n",
+            encoding="utf-8",
+        )
+        Reconciler(settings, store, client, project_id="project-1").run()
+        assert client.updated[-1]["items"][0]["status"] == 1
+
+        client.tasks[0] = client.tasks[0].model_copy(
+            update={"items": [client.tasks[0].items[0].model_copy(update={"status": 0})]}
+        )
+        Reconciler(settings, store, client, project_id="project-1").run()
+
+    assert "  - [ ] Child task" in note.read_text(encoding="utf-8")
 
 
 def test_unmarked_markdown_task_is_created_once(tmp_path):

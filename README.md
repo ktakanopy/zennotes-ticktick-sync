@@ -44,6 +44,18 @@ first synchronized. The Markdown line is then canonicalized to
 `due:YYYY-MM-DDTHH:MM`, so it does not move again at midnight. Existing
 date-only syntax such as `due:2026-08-27` remains supported.
 
+Indent one level beneath a task to create TickTick checklist sub-items:
+
+    - [ ] Test the agent
+      - [x] Generate the settings table
+      - [ ] Test in production
+
+The parent task is synchronized as the calendar task; the indented checkboxes
+are synchronized as native TickTick checklist items. Their completion state,
+title and optional date/time are synchronized in both directions. The public
+TickTick API exposes these as checklist items rather than independent,
+full-featured multilevel tasks, so child tags and priorities are not sent.
+
 ## Server setup
 
 Install `uv`, then synchronize the project from `pyproject.toml` and
